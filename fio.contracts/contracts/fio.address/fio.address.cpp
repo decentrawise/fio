@@ -1455,6 +1455,81 @@ namespace fioio {
         }
 
         [[eosio::action]]
+        void burnaddress(const string &fio_address, const int64_t &max_fee, const string &tpid, const name &actor) {
+            require_auth(actor);
+            FioAddress fa;
+            getFioAddressStruct(fio_address, fa);
+
+            fio_400_assert(validateFioNameFormat(fa) && !fa.domainOnly, "fio_address", fa.fioaddress, "Invalid FIO Address",
+                           ErrorDomainAlreadyRegistered);
+            fio_400_assert(validateTPIDFormat(tpid), "tpid", tpid,
+                           "TPID must be empty or valid FIO address",
+                           ErrorPubKeyValid);
+            fio_400_assert(max_fee >= 0, "max_fee", to_string(max_fee), "Invalid fee value",
+                           ErrorMaxFeeInvalid);
+
+            const uint128_t nameHash = string_to_uint128_hash(fa.fioaddress.c_str());
+            auto namesbyname = fionames.get_index<"byname"_n>();
+            auto fioname_iter = namesbyname.find(nameHash);
+            fio_400_assert(fioname_iter != namesbyname.end(), "fio_address", fa.fioaddress,
+                           "FIO Address not registered", ErrorFioNameAlreadyRegistered);
+
+            const uint32_t expiration = fioname_iter->expiration;
+            const uint32_t present_time = now();
+            fio_400_assert(present_time <= expiration, "fio_address", fio_address, "FIO Address expired. Renew first.",
+                           ErrorDomainExpired);
+
+            fio_403_assert(fioname_iter->owner_account == actor.value, ErrorSignature);
+            const uint128_t endpoint_hash = string_to_uint128_hash("burn_fio_address");
+
+            auto fees_by_endpoint = fiofees.get_index<"byendpoint"_n>();
+            auto fee_iter = fees_by_endpoint.find(endpoint_hash);
+            fio_400_assert(fee_iter != fees_by_endpoint.end(), "endpoint_name", "burn_fio_address",
+                           "FIO fee not found for endpoint", ErrorNoEndpoint);
+
+            auto producersbyaddress = producers.get_index<"byaddress"_n>();
+            auto prod_iter = producersbyaddress.find(nameHash);
+            if(prod_iter != producersbyaddress.end()){
+                fio_400_assert(!prod_iter->is_active, "fio_address", fio_address,
+                               "FIO Address is active producer. Unregister first.", ErrorNoEndpoint);
+            }
+
+            auto proxybyaddress = voters.get_index<"byaddress"_n>();
+            auto proxy_iter = proxybyaddress.find(nameHash);
+            if(proxy_iter != proxybyaddress.end()){
+                fio_400_assert(!proxy_iter->is_proxy, "fio_address", fio_address,
+                               "FIO Address is proxy. Unregister first.", ErrorNoEndpoint);
+            }
+
+            //do the burn
+            namesbyname.erase(fioname_iter);
+
+            //fees
+            const uint64_t fee_amount = fee_iter->suf_amount;
+            const uint64_t fee_type = fee_iter->type;
+
+            fio_400_assert(fee_type == 0, "fee_type", to_string(fee_type),
+                           "register_fio_address unexpected fee type for endpoint register_fio_domain, expected 0",
+                           ErrorNoEndpoint);
+
+            fio_400_assert(max_fee >= (int64_t) fee_amount, "max_fee", to_string(max_fee),
+                           "Fee exceeds supplied maximum.",
+                           ErrorMaxFeeExceeded);
+
+            fio_fees(actor, asset(fee_amount, FIOSYMBOL));
+            processbucketrewards(tpid, fee_amount, get_self(), actor);
+
+            const string response_string = string("{\"status\": \"OK\",\"fee_collected\":") +
+                                           to_string(fee_amount) + string("}");
+
+            fio_400_assert(transaction_size() <= MAX_TRX_SIZE, "transaction_size", std::to_string(transaction_size()),
+                           "Transaction is too large", ErrorTransaction);
+
+            send_response(response_string.c_str());
+
+        }
+
+        [[eosio::action]]
         void xferdomain(const string &fio_domain, const string &new_owner_fio_public_key, const int64_t &max_fee,
                         const string &tpid, const name &actor) {
             require_auth(actor);
@@ -1551,5 +1626,5 @@ namespace fioio {
     };
 
     EOSIO_DISPATCH(FioNameLookup, (regaddress)(addaddress)(remaddress)(remalladdr)(regdomain)(renewdomain)(renewaddress)(setdomainpub)(burnexpired)(decrcounter)
-    (bind2eosio) (xferdomain)(xferaddress))
+    (bind2eosio)(burnaddress)(xferdomain)(xferaddress))
 }
