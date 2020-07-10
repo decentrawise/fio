@@ -1501,8 +1501,12 @@ namespace fioio {
                                "FIO Address is proxy. Unregister first.", ErrorNoEndpoint);
             }
 
+            auto tpid_by_name = tpids.get_index<"byname"_n>();
+            auto tpid_iter = tpid_by_name.find(nameHash);
+
             //do the burn
             namesbyname.erase(fioname_iter);
+            if( tpid_iter != tpid_by_name.end() ){ tpid_by_name.erase(tpid_iter); }
 
             //fees
             uint64_t fee_amount = 0;
